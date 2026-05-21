@@ -1,149 +1,253 @@
 /**
- * PDFViewer Component
- * ====================
- * Main canvas area that renders the PDF using PDF.js and overlays
- * a Fabric.js canvas for drawing, text, and annotations.
+ * PDFViewer Component — Multi-page, Real-time Editing
+ * =====================================================
+ * - Shows ALL pages scrollable vertically
+ * - Text editing: hover → blue border, click → edit inline
+ * - Changes applied IMMEDIATELY to PDF bytes (real-time)
+ * - Undo/Redo via PDF bytes history
  */
 
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useState, memo } from "react";
 import useEditorStore from "../../store/editorStore";
-import { renderPage } from "../../utils/pdfUtils";
-import * as fabric from "fabric";
+import { renderPage, extractTextItems, replaceTextInPdf, loadPdf } from "../../utils/pdfUtils";
 
+// ── Single Page Component ───────────────────────────────────────────
+const PDFPageView = memo(function PDFPageView({ pdfDocument, pageNum, scale, onTextEdit }) {
+  const activeTool = useEditorStore((state) => state.activeTool);
+  const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
+  const [textItems, setTextItems] = useState([]);
+
+  const renderTaskRef = useRef(null);
+
+  // Render the page
+  useEffect(() => {
+    if (!pdfDocument || !canvasRef.current) return;
+    let cancelled = false;
+
+    const render = async () => {
+      // Wait for any previous render task to fully abort/finish
+      if (renderTaskRef.current) {
+        try {
+          await renderTaskRef.current.promise;
+        } catch (e) {
+          // ignore previous cancellations
+        }
+      }
+      if (cancelled) return;
+
+      let result;
+      try {
+        result = await renderPage(pdfDocument, pageNum, canvasRef.current, scale);
+        renderTaskRef.current = result.renderTask;
+        const viewport = result.viewport;
+        
+        await result.renderTask.promise;
+
+        if (cancelled) return;
+        const items = await extractTextItems(pdfDocument, pageNum, scale);
+        if (cancelled) return;
+        setTextItems(items);
+      } catch (e) {
+        if (e.name !== "RenderingCancelledException") {
+          console.error(`Error rendering page ${pageNum}:`, e);
+        }
+      } finally {
+        if (renderTaskRef.current === result?.renderTask) {
+          renderTaskRef.current = null;
+        }
+      }
+    };
+
+    render();
+    return () => { 
+      cancelled = true; 
+      if (renderTaskRef.current) {
+        renderTaskRef.current.cancel();
+      }
+    };
+  }, [pdfDocument, pageNum, scale]);
+
+  // Click to edit
+  const handleClick = useCallback((e) => {
+    const span = e.target.closest(".pdf-text-span");
+    if (!span || span.contentEditable === "true") return;
+
+    span.contentEditable = "true";
+    span.style.color = "#000";
+    span.style.background = "rgba(255, 255, 255, 0.97)";
+    span.style.border = "2px dashed #2196F3";
+    span.style.outline = "none";
+    span.style.zIndex = "10";
+    span.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }, []);
+
+  // Save on blur
+  const handleBlur = useCallback((e) => {
+    const span = e.target;
+    if (!span.classList?.contains("pdf-text-span") || span.contentEditable !== "true") return;
+
+    span.contentEditable = "false";
+    span.style.zIndex = "";
+    span.style.border = "";
+    span.style.background = "";
+    span.style.color = "transparent";
+    span.style.cursor = "";
+
+    const idx = parseInt(span.dataset.index);
+    const item = textItems[idx];
+    if (!item) return;
+
+    const newText = span.textContent || "";
+    if (newText !== item.text && newText.trim()) {
+      onTextEdit(pageNum, item, newText);
+    }
+  }, [textItems, pageNum, onTextEdit]);
+
+  // Keyboard shortcuts
+  const handleKeyDown = useCallback((e) => {
+    if (e.key === "Escape") {
+      const span = document.activeElement;
+      if (span?.classList?.contains("pdf-text-span")) {
+        const idx = parseInt(span.dataset.index);
+        const item = textItems[idx];
+        if (item) span.textContent = item.text;
+        span.blur();
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      document.activeElement?.blur();
+    }
+  }, [textItems]);
+
+  return (
+    <div className="pdf-page-container">
+      <div className="pdf-canvas-wrapper">
+        <canvas
+          ref={canvasRef}
+          className="pdf-canvas"
+        />
+
+        {/* Text overlay for editing */}
+        <div
+          ref={overlayRef}
+          className={`pdf-text-overlay ${activeTool === "text" ? "text-mode" : ""}`}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: "100%",
+            height: "100%",
+            zIndex: 2,
+            pointerEvents: activeTool === "text" ? "auto" : "none",
+          }}
+          onClick={handleClick}
+          onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
+        >
+          {textItems.map((item, idx) =>
+            item.text && item.text.trim() ? (
+              <span
+                key={idx}
+                className="pdf-text-span"
+                data-index={idx}
+                style={{
+                  position: "absolute",
+                  left: item.x + "px",
+                  top: item.y + "px",
+                  width: item.width + "px",
+                  height: item.height + "px",
+                  display: "inline-block",
+                  fontSize: item.fontSize + "px",
+                  fontFamily: "sans-serif",
+                  lineHeight: "1",
+                  color: "transparent",
+                  whiteSpace: "pre",
+                  cursor: "default",
+                  padding: "0",
+                  boxSizing: "border-box",
+                }}
+              >
+                {item.text}
+              </span>
+            ) : null
+          )}
+        </div>
+      </div>
+
+      <div className="page-number-label">{pageNum}</div>
+    </div>
+  );
+});
+
+// ── Main PDFViewer ──────────────────────────────────────────────────
 export default function PDFViewer() {
   const containerRef = useRef(null);
-  const pdfCanvasRef = useRef(null);
-  const fabricCanvasRef = useRef(null);
-  const fabricInstanceRef = useRef(null);
-
   const {
-    pdfDocument, currentPage, zoom, isLoading,
-    activeTool, getPageAnnotations, savePageAnnotations,
+    pdfDocument, totalPages, zoom, isLoading,
+    activeTool, needsReload,
   } = useEditorStore();
 
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const scale = zoom * 1.5;
 
-  // 1. Render PDF and setup dimensions
-  const renderCurrentPage = useCallback(async () => {
-    if (!pdfDocument || !pdfCanvasRef.current) return;
+  // Handle undo/redo reload
+  useEffect(() => {
+    if (!needsReload) return;
+    const bytes = useEditorStore.getState().pdfBytes;
+    if (!bytes) return;
+
+    loadPdf(bytes).then((doc) => {
+      useEditorStore.getState().setPdfDocument(doc);
+      useEditorStore.getState().clearReload();
+    }).catch((e) => {
+      console.error("Failed to reload PDF after undo/redo:", e);
+      useEditorStore.getState().clearReload();
+    });
+  }, [needsReload]);
+
+  // Real-time text edit handler
+  const handleTextEdit = useCallback(async (pageNum, item, newText) => {
+    const store = useEditorStore.getState();
+    if (!store.pdfBytes) return;
+
+    // Save current state for undo
+    store.pushUndo(store.pdfBytes);
+    store.setLoading(true);
 
     try {
-      const viewport = await renderPage(pdfDocument, currentPage, pdfCanvasRef.current, zoom * 1.5);
-      
-      setDimensions({ width: viewport.width, height: viewport.height });
-    } catch (error) {
-      console.error("Error rendering PDF page:", error);
-    }
-  }, [pdfDocument, currentPage, zoom]);
+      const newBytes = await replaceTextInPdf(store.pdfBytes, pageNum, item, newText);
+      const newDoc = await loadPdf(newBytes);
 
-  useEffect(() => {
-    renderCurrentPage();
-  }, [renderCurrentPage]);
-
-  // 2. Initialize Fabric.js Canvas once dimensions are set
-  useEffect(() => {
-    if (!fabricCanvasRef.current || dimensions.width === 0) return;
-
-    // Destroy existing instance if it exists
-    if (fabricInstanceRef.current) {
-      fabricInstanceRef.current.dispose();
-    }
-
-    // Initialize new Fabric canvas
-    const canvas = new fabric.Canvas(fabricCanvasRef.current, {
-      width: dimensions.width,
-      height: dimensions.height,
-      selection: true,
-    });
-    fabricInstanceRef.current = canvas;
-
-    // Load saved annotations for this page if they exist
-    const savedAnnotations = getPageAnnotations(currentPage);
-    if (savedAnnotations) {
-      canvas.loadFromJSON(savedAnnotations, () => {
-        canvas.renderAll();
+      // Apply immediately
+      useEditorStore.setState({
+        pdfBytes: newBytes,
+        pdfDocument: newDoc,
+        isLoading: false,
       });
+    } catch (e) {
+      console.error("Failed to apply text edit:", e);
+      useEditorStore.setState({ isLoading: false });
     }
+  }, []);
 
-    // Event listener to save state on changes
-    const saveState = () => {
-      savePageAnnotations(currentPage, canvas.toJSON());
-    };
-
-    canvas.on('object:added', saveState);
-    canvas.on('object:modified', saveState);
-    canvas.on('object:removed', saveState);
-    canvas.on('path:created', saveState);
-
-    return () => {
-      canvas.dispose();
-      fabricInstanceRef.current = null;
-    };
-  }, [dimensions, currentPage, getPageAnnotations, savePageAnnotations]);
-
-  // 3. Update Fabric interactions based on activeTool
-  useEffect(() => {
-    const canvas = fabricInstanceRef.current;
-    if (!canvas) return;
-
-    // Reset modes
-    canvas.isDrawingMode = false;
-    canvas.selection = true;
-    canvas.forEachObject((obj) => {
-      obj.selectable = true;
-      obj.evented = true;
-    });
-
-    if (activeTool === "sign" || activeTool === "highlight") {
-      canvas.isDrawingMode = true;
-      const brush = new fabric.PencilBrush(canvas);
-      if (activeTool === "highlight") {
-        brush.color = "rgba(255, 235, 59, 0.5)"; // Translucent yellow
-        brush.width = 16 * zoom;
-      } else {
-        brush.color = "black";
-        brush.width = 2 * zoom;
-      }
-      canvas.freeDrawingBrush = brush;
-    } else if (activeTool === "select") {
-      // Default selection mode
-    } else if (activeTool === "text") {
-      // We will handle text addition via click events later
-      canvas.selection = false;
-    }
-
-    // Custom click handler for adding text/shapes
-    const handleMouseUp = (opt) => {
-      if (activeTool === "text" && !opt.target) {
-        const text = new fabric.IText("Type here", {
-          left: opt.pointer.x,
-          top: opt.pointer.y,
-          fontFamily: "Inter",
-          fontSize: 20 * zoom,
-          fill: "black",
-        });
-        canvas.add(text);
-        canvas.setActiveObject(text);
-        text.enterEditing();
-        text.selectAll();
-        savePageAnnotations(currentPage, canvas.toJSON());
-      }
-    };
-
-    canvas.on('mouse:up', handleMouseUp);
-
-    return () => {
-      canvas.off('mouse:up', handleMouseUp);
-    };
-  }, [activeTool, currentPage, zoom, savePageAnnotations]);
-
+  // Build page list
+  const pages = [];
+  for (let i = 1; i <= totalPages; i++) {
+    pages.push(i);
+  }
 
   return (
     <div className="pdf-viewer" ref={containerRef}>
       {isLoading && (
-        <div className="pdf-loading">
+        <div className="pdf-loading-overlay">
           <div className="loading-spinner" />
-          <p>Loading PDF...</p>
         </div>
       )}
 
@@ -172,21 +276,16 @@ export default function PDFViewer() {
       )}
 
       {pdfDocument && (
-        <div 
-          className="pdf-canvas-wrapper" 
-          style={{ width: dimensions.width, height: dimensions.height, position: "relative" }}
-        >
-          {/* Base PDF Canvas */}
-          <canvas 
-            ref={pdfCanvasRef} 
-            className="pdf-canvas" 
-            style={{ position: "absolute", left: 0, top: 0, zIndex: 1 }} 
-          />
-          
-          {/* Fabric.js Annotation Layer */}
-          <div style={{ position: "absolute", left: 0, top: 0, zIndex: 2 }}>
-            <canvas ref={fabricCanvasRef} />
-          </div>
+        <div className="pdf-pages-scroll">
+          {pages.map((pageNum) => (
+            <PDFPageView
+              key={pageNum}
+              pdfDocument={pdfDocument}
+              pageNum={pageNum}
+              scale={scale}
+              onTextEdit={handleTextEdit}
+            />
+          ))}
         </div>
       )}
     </div>

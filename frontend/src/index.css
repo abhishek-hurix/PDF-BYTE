@@ -812,10 +812,44 @@ input {
   height: 100%;
   overflow: auto;
   display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 24px;
+  flex-direction: column;
+  align-items: center;
   background: var(--color-bg-canvas);
+  position: relative;
+}
+
+.pdf-pages-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+}
+
+.pdf-page-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-number-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+/* Loading overlay (non-blocking) */
+.pdf-loading-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1000;
+  background: rgba(255,255,255,0.85);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
 }
 
 .pdf-viewer::-webkit-scrollbar {
@@ -857,6 +891,89 @@ input {
 }
 
 /* Empty State */
+.pdf-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #64748b;
+}
+
+/* --- DOM Text Overlay (Sejda Style) --- */
+.pdf-text-overlay {
+  overflow: hidden;
+}
+
+.pdf-text-span {
+  user-select: none;
+}
+
+.pdf-text-span[contenteditable="true"] {
+  user-select: text;
+  cursor: text;
+}
+
+/* --- Apply Changes Bar --- */
+.apply-changes-bar {
+  position: absolute;
+  bottom: -52px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #1e293b;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  z-index: 100;
+  white-space: nowrap;
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.pending-count {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.apply-all-btn {
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.apply-all-btn:hover {
+  background: #388E3C;
+}
+
+.discard-all-btn {
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid #ef4444;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.discard-all-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .pdf-empty-state {
   display: flex;
   flex-direction: column;
@@ -913,4 +1030,24 @@ input {
 .pdf-canvas {
   display: block;
   background: white;
+}
+
+/* Text span hover — pure CSS, no JS needed */
+.pdf-text-span {
+  border: 1px solid transparent;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.text-mode .pdf-text-span:hover {
+  border: 1px dashed #2196F3 !important;
+  background: rgba(33, 150, 243, 0.06) !important;
+  cursor: text !important;
+}
+
+.text-mode .pdf-text-span[contenteditable="true"] {
+  border: 2px dashed #2196F3 !important;
+  background: rgba(255, 255, 255, 0.97) !important;
+  color: #000 !important;
+  cursor: text !important;
+  z-index: 10;
 }

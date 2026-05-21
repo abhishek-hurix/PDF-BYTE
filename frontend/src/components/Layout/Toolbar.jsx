@@ -5,6 +5,7 @@
  *               Highlight | Sign | Forms | Shapes | [Page Nav] | [Search]
  */
 
+import { useState, useEffect } from "react";
 import useEditorStore from "../../store/editorStore";
 import {
   Undo2, Redo2, MousePointer2, Type, ImagePlus,
@@ -29,7 +30,22 @@ export default function Toolbar() {
     currentPage, totalPages, setCurrentPage,
     prevPage, nextPage,
     zoom, zoomIn, zoomOut,
+    undo, redo, undoStack, redoStack
   } = useEditorStore();
+
+  const [pageInputValue, setPageInputValue] = useState(currentPage.toString());
+
+  useEffect(() => {
+    setPageInputValue(currentPage.toString());
+  }, [currentPage]);
+
+  const handlePageSubmit = () => {
+    let newPage = parseInt(pageInputValue);
+    if (isNaN(newPage) || newPage < 1) newPage = 1;
+    if (newPage > totalPages && totalPages > 0) newPage = totalPages;
+    setCurrentPage(newPage);
+    setPageInputValue(newPage.toString());
+  };
 
   return (
     <div className="toolbar">
@@ -37,11 +53,21 @@ export default function Toolbar() {
       <div className="toolbar-left">
         {/* Undo / Redo */}
         <div className="toolbar-group">
-          <button className="toolbar-btn" title="Undo (Ctrl+Z)">
+          <button 
+            className="toolbar-btn" 
+            title="Undo (Ctrl+Z)" 
+            onClick={undo}
+            disabled={undoStack.length === 0}
+          >
             <Undo2 size={18} />
             <span className="toolbar-label">Undo</span>
           </button>
-          <button className="toolbar-btn" title="Redo (Ctrl+Y)">
+          <button 
+            className="toolbar-btn" 
+            title="Redo (Ctrl+Y)"
+            onClick={redo}
+            disabled={redoStack.length === 0}
+          >
             <Redo2 size={18} />
             <span className="toolbar-label">Redo</span>
           </button>
@@ -96,12 +122,14 @@ export default function Toolbar() {
           <span className="page-indicator">
             Page{" "}
             <input
-              type="number"
+              type="text"
               className="page-input"
-              value={currentPage}
-              min={1}
-              max={totalPages}
-              onChange={(e) => setCurrentPage(parseInt(e.target.value) || 1)}
+              value={pageInputValue}
+              onChange={(e) => setPageInputValue(e.target.value)}
+              onBlur={handlePageSubmit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handlePageSubmit();
+              }}
             />{" "}
             of {totalPages}
           </span>

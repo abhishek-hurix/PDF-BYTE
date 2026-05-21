@@ -5,7 +5,7 @@
  */
 
 import * as pdfjsLib from "pdfjs-dist";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 
@@ -21,9 +21,12 @@ export async function loadPdf(source) {
   let data;
 
   if (source instanceof File) {
-    data = await source.arrayBuffer();
+    data = new Uint8Array(await source.arrayBuffer());
+  } else if (source instanceof ArrayBuffer) {
+    data = new Uint8Array(source);
   } else {
-    data = source;
+    // Uint8Array — make a copy so PDF.js doesn't detach our stored buffer
+    data = new Uint8Array(source);
   }
 
   const loadingTask = pdfjsLib.getDocument({ data });
@@ -50,8 +53,8 @@ export async function renderPage(pdfDoc, pageNum, canvas, scale = 1.5) {
     viewport: viewport,
   };
 
-  await page.render(renderContext).promise;
-  return viewport;
+  const renderTask = page.render(renderContext);
+  return { renderTask, viewport };
 }
 
 /**
@@ -202,4 +205,124 @@ export async function getPdfMetadata(pdfDoc) {
     modDate: metadata.info?.ModDate || "",
     pageCount: pdfDoc.numPages,
   };
+}
+
+/**
+ * Extract text items with exact positional bounds from a PDF page
+ * @param {PDFDocumentProxy} pdfDoc - PDF.js document
+ * @param {number} pageNum - Page number (1-indexed)
+ * @param {number} scale - Viewport scale factor used for rendering
+ * @returns {Promise<Array>} - Array of text items with x, y, width, height, and text
+ */
+export async function extractTextItems(pdfDoc, pageNum, scale = 1.5) {
+  const page = await pdfDoc.getPage(pageNum);
+  const viewport = page.getViewport({ scale });
+  const textContent = await page.getTextContent();
+  
+  const items = textContent.items.map((item) => {
+    // The transform matrix: [scaleX, skewY, skewX, scaleY, tx, ty]
+    const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+    
+    // Original PDF coordinates (for pdf-lib replacement)
+    const originalTx = item.transform[4];
+    const originalTy = item.transform[5];
+    const originalFontSize = Math.sqrt(item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]);
+
+    // Screen-space font size
+    const fontSize = Math.sqrt(tx[2] * tx[2] + tx[3] * tx[3]);
+    // Use ascent ratio (~0.8) instead of full height for correct Y positioning
+    // This matches how PDF.js TextLayer positions text spans
+    const fontAscent = fontSize * 0.8;
+    const width = item.width * scale;
+    
+    return {
+      text: item.str,
+      x: tx[4],
+      y: tx[5] - fontAscent,
+      width: width,
+      height: fontSize,
+      fontSize: fontSize,
+      fontName: item.fontName,
+      dir: item.dir,
+      pdfX: originalTx,
+      pdfY: originalTy,
+      pdfFontSize: originalFontSize,
+      pdfWidth: item.width,
+    };
+  });
+  
+  return items;
+}
+
+/**
+ * Replace text in the PDF by drawing a white box over the old text and adding new text
+ * @param {ArrayBuffer} pdfBytes - Original PDF bytes
+ * @param {number} pageNum - Page number (1-indexed)
+ * @param {Object} oldItem - The item object from extractTextItems
+ * @param {string} newText - The new text string
+ * @returns {Promise<Uint8Array>} - Modified PDF bytes
+ */
+export async function replaceTextInPdf(pdfBytes, pageNum, oldItem, newText) {
+  // Always copy bytes to avoid detached buffer issues
+  const bytes = pdfBytes instanceof Uint8Array ? new Uint8Array(pdfBytes) : new Uint8Array(pdfBytes);
+  const doc = await PDFDocument.load(bytes);
+  const page = doc.getPage(pageNum - 1);
+  
+  page.drawRectangle({
+    x: oldItem.pdfX - 4,
+    y: oldItem.pdfY - (oldItem.pdfFontSize * 0.3),
+    width: oldItem.pdfWidth + 8,
+    height: oldItem.pdfFontSize * 1.4,
+    color: rgb(1, 1, 1),
+  });
+
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+
+  page.drawText(newText, {
+    x: oldItem.pdfX,
+    y: oldItem.pdfY,
+    size: oldItem.pdfFontSize,
+    font: font,
+    color: rgb(0, 0, 0),
+  });
+
+  return await doc.save();
+}
+
+/**
+ * Batch replace multiple text items in a PDF page
+ * @param {ArrayBuffer} pdfBytes - Original PDF bytes
+ * @param {number} pageNum - Page number (1-indexed)
+ * @param {Array} edits - Array of { item, newText } objects
+ * @returns {Promise<Uint8Array>} - Modified PDF bytes
+ */
+export async function batchReplaceTextInPdf(pdfBytes, pageNum, edits) {
+  const bytes = new Uint8Array(pdfBytes);
+  const doc = await PDFDocument.load(bytes);
+  const page = doc.getPage(pageNum - 1);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+
+  for (const edit of edits) {
+    const { item, newText } = edit;
+
+    // White-out original text
+    page.drawRectangle({
+      x: item.pdfX - 4,
+      y: item.pdfY - (item.pdfFontSize * 0.3),
+      width: item.pdfWidth + 8,
+      height: item.pdfFontSize * 1.4,
+      color: rgb(1, 1, 1),
+    });
+
+    // Draw replacement text
+    page.drawText(newText, {
+      x: item.pdfX,
+      y: item.pdfY,
+      size: item.pdfFontSize,
+      font: font,
+      color: rgb(0, 0, 0),
+    });
+  }
+
+  return await doc.save();
 }

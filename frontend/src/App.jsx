@@ -8,12 +8,10 @@
 import { useEffect, useCallback } from "react";
 import useEditorStore from "./store/editorStore";
 import { loadPdf } from "./utils/pdfUtils";
-import { checkHealth } from "./config/api";
 
 import MenuBar from "./components/Layout/MenuBar";
 import Toolbar from "./components/Layout/Toolbar";
 import LeftSidebar from "./components/Sidebar/LeftSidebar";
-import RightSidebar from "./components/Sidebar/RightSidebar";
 import PDFViewer from "./components/Canvas/PDFViewer";
 
 import "./index.css";
@@ -21,8 +19,7 @@ import "./index.css";
 export default function App() {
   const {
     setPdfFile, setPdfDocument, setPdfBytes,
-    setLoading, setBackendStatus,
-    leftSidebarOpen, rightSidebarOpen,
+    setLoading, leftSidebarOpen,
   } = useEditorStore();
 
   /** Handle PDF file open */
@@ -34,12 +31,13 @@ export default function App() {
       // Store original file
       setPdfFile(file);
 
-      // Read file bytes
+      // Read file bytes — store as Uint8Array so it's never detached
       const arrayBuffer = await file.arrayBuffer();
-      setPdfBytes(arrayBuffer);
+      const bytesForStore = new Uint8Array(arrayBuffer);
+      setPdfBytes(bytesForStore);
 
-      // Load with PDF.js
-      const pdfDoc = await loadPdf(arrayBuffer.slice(0));
+      // Load with PDF.js (give it its own copy)
+      const pdfDoc = await loadPdf(new Uint8Array(arrayBuffer));
       setPdfDocument(pdfDoc);
     } catch (error) {
       console.error("Failed to load PDF:", error);
@@ -77,13 +75,6 @@ export default function App() {
     };
   }, [handleOpenPdf]);
 
-  /** Check backend health on mount */
-  useEffect(() => {
-    checkHealth().then((res) => {
-      setBackendStatus(res.status === "healthy" ? "healthy" : "offline");
-    });
-  }, [setBackendStatus]);
-
   /** Keyboard shortcuts */
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -118,11 +109,9 @@ export default function App() {
       <div className="workspace">
         <LeftSidebar />
 
-        <main className={`main-canvas ${!leftSidebarOpen ? "no-left" : ""} ${!rightSidebarOpen ? "no-right" : ""}`}>
+        <main className={`main-canvas ${!leftSidebarOpen ? "no-left" : ""}`}>
           <PDFViewer />
         </main>
-
-        <RightSidebar />
       </div>
     </div>
   );

@@ -96,13 +96,7 @@ const MENUS = [
       { label: "N-up Printing...", action: "nup" },
     ],
   },
-  {
-    label: "Comment",
-    items: [
-      { label: "Add Comment", action: "addComment" },
-      { label: "Show All Comments", action: "showComments" },
-    ],
-  },
+
   {
     label: "Share",
     items: [
@@ -115,7 +109,6 @@ const MENUS = [
 export default function MenuBar() {
   const [activeMenu, setActiveMenu] = useState(null);
   const fileName = useEditorStore((s) => s.fileName);
-  const toggleRightSidebar = useEditorStore((s) => s.toggleRightSidebar);
 
   const handleMenuClick = (menuLabel) => {
     setActiveMenu(activeMenu === menuLabel ? null : menuLabel);
@@ -177,17 +170,7 @@ export default function MenuBar() {
         ))}
       </nav>
 
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px" }}>
-        <button
-          className="menu-item-button"
-          onClick={toggleRightSidebar}
-          title="Toggle Chatbox"
-          style={{ display: "flex", alignItems: "center", gap: "6px", backgroundColor: "var(--color-primary)", color: "white", padding: "6px 12px", borderRadius: "var(--radius-md)" }}
-        >
-          <MessageSquare size={16} />
-          <span style={{ fontWeight: 500 }}>Chat</span>
-        </button>
-      </div>
+
 
       {/* Close menu when clicking outside */}
       {activeMenu && (
